@@ -46,6 +46,9 @@ class BenchmarkSummary(BaseModel):
     total_requests: int = Field(0, alias=Metrics.TOTAL_REQUESTS)
     succeed_requests: int = Field(0, alias=Metrics.SUCCEED_REQUESTS)
     failed_requests: int = Field(0, alias=Metrics.FAILED_REQUESTS)
+    rate_limited_rate: float = Field(-1, alias=Metrics.RATE_LIMITED_RATE)
+    server_error_rate: float = Field(-1, alias=Metrics.SERVER_ERROR_RATE)
+    classified_failures: int = Field(0, alias='Classified Failures')
     stream_requests: int = Field(0, alias=Metrics.STREAM_REQUESTS)
     non_stream_requests: int = Field(0, alias=Metrics.NON_STREAM_REQUESTS)
     request_throughput: float = Field(0.0, alias=Metrics.REQUEST_THROUGHPUT)
@@ -138,6 +141,16 @@ class BenchmarkSummary(BaseModel):
         rows.append(
             ('Total / Success / Failed', f'{self.total_requests} / {self.succeed_requests} / {self.failed_requests}')
         )
+        if self.failed_requests > 0:
+            # Breakdown row only exists when something failed: an all-success run keeps
+            # today's shape, and a run whose failures carried no status code shows -1
+            # (not applicable) instead of a misleading 0%.
+            classified_note = (
+                f' ({self.classified_failures}/{self.failed_requests} failures carried a status code)'
+                if self.classified_failures < self.failed_requests
+                else ''
+            )
+            rows.append(('429 / 5xx Rate (%)', f'{self.rate_limited_rate} / {self.server_error_rate}{classified_note}'))
         if self.stream_requests > 0 and self.non_stream_requests > 0:
             rows.append(('Stream / Non-Stream', f'{self.stream_requests} / {self.non_stream_requests}'))
         rows.append((Metrics.REQUEST_THROUGHPUT, _fmt(Metrics.REQUEST_THROUGHPUT, self.request_throughput)))

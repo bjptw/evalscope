@@ -27,6 +27,13 @@ class Metrics:
     TIME_TAKEN_FOR_TESTS = 'Test Duration (s)'
     NUMBER_OF_CONCURRENCY = 'Concurrency'
     REQUEST_RATE = 'Request Rate (req/s)'
+    # Failure rates derived from response status codes (share of total requests). A 429 is
+    # a capacity signal (the gateway throttling the load), a 5xx is a reliability signal
+    # (the service is unhealthy); reporting them separately is what makes the summary
+    # actionable. Backends that never surface a status code stay out of the breakdown.
+    ERROR_RATE = 'Error Rate (%)'
+    RATE_LIMITED_RATE = '429 Rate (%)'
+    SERVER_ERROR_RATE = 'Server Error Rate (5xx, %)'
     TOTAL_REQUESTS = 'Total Requests'
     SUCCEED_REQUESTS = 'Success Requests'
     FAILED_REQUESTS = 'Failed Requests'

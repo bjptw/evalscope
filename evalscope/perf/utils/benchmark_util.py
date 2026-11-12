@@ -180,6 +180,9 @@ class MetricsAccumulator:
     # --- Request counts ---
     n_total: int = 0
     n_success: int = 0
+    n_rate_limited: int = 0
+    n_server_errors: int = 0
+    n_classified_failures: int = 0
 
     # --- Wall-clock time window (private; exposed via wall_time property) ---
     _wall_start: Optional[float] = field(default=None, repr=False)
@@ -322,6 +325,19 @@ class MetricsAccumulator:
                 self.total_decoded_tokens_per_iter += data.decoded_tokens_per_iter
                 self.n_decoded_samples += 1
 
+        if not data.success:
+            # Failure breakdown by response status (see perf_constants): 429 is a capacity
+            # signal, 5xx a reliability signal. Failures without a status code (transport
+            # errors, client-side exceptions) stay in the failed total but out of the
+            # breakdown — an unclassified failure must not read as "no 429s happened".
+            self.n_classified_failures += 1
+            if data.status_code == 429:
+                self.n_rate_limited += 1
+            elif data.status_code is not None and 500 <= data.status_code < 600:
+                self.n_server_errors += 1
+            else:
+                self.n_classified_failures -= 1  # no status: stays unclassified
+
         self._update_wall_time(data)
 
     def _update_wall_time(self, data: BenchmarkData) -> None:
@@ -442,12 +458,31 @@ class MetricsAccumulator:
             cache_request_coverage_percent = cache_token_coverage_percent = -1
             avg_first_turn_ttft = avg_subsequent_turn_ttft = -1
 
+        # Status-code-derived rates (share of total requests). The breakdown is
+        # computable only when at least one failure carried a status code; a run whose
+        # failures are all transport-level reports -1 (not applicable), never 0.0 — 0.0
+        # would read as "no throttling happened", which is the opposite of "not measured".
+        if self.n_total == 0:
+            rate_limited_rate = server_error_rate = -1
+        elif self.n_failed == 0:
+            rate_limited_rate = server_error_rate = 0.0  # all-success: measured, none seen
+        elif self.n_classified_failures == 0:
+            rate_limited_rate = server_error_rate = -1
+        else:
+            rate_limited_rate = _safe_div(self.n_rate_limited * 100.0, self.n_total)
+            server_error_rate = _safe_div(self.n_server_errors * 100.0, self.n_total)
+
         return BenchmarkMetrics(
             concurrency=self.concurrency,
             rate=self.rate,
             total_requests=self.n_total,
             succeed_requests=self.n_success,
             failed_requests=self.n_failed,
+            rate_limited_requests=self.n_rate_limited,
+            server_error_requests=self.n_server_errors,
+            classified_failures=self.n_classified_failures,
+            rate_limited_rate=rate_limited_rate,
+            server_error_rate=server_error_rate,
             stream_requests=self.n_stream_total,
             non_stream_requests=self.n_non_stream_total,
             total_time=t,
@@ -515,6 +550,11 @@ class BenchmarkMetrics:
     total_requests: int = 0
     succeed_requests: int = 0
     failed_requests: int = 0
+    rate_limited_requests: int = 0
+    server_error_requests: int = 0
+    classified_failures: int = 0
+    rate_limited_rate: float = -1
+    server_error_rate: float = -1
     stream_requests: int = 0
     non_stream_requests: int = 0
     total_time: float = 0.0
@@ -592,6 +632,12 @@ class BenchmarkMetrics:
             Metrics.TOTAL_REQUESTS: int(self.total_requests),
             Metrics.SUCCEED_REQUESTS: self.succeed_requests,
             Metrics.FAILED_REQUESTS: self.failed_requests,
+            Metrics.RATE_LIMITED_RATE: (
+                round(self.rate_limited_rate, 2) if self.rate_limited_rate >= 0 else self.rate_limited_rate
+            ),
+            Metrics.SERVER_ERROR_RATE: (
+                round(self.server_error_rate, 2) if self.server_error_rate >= 0 else self.server_error_rate
+            ),
             Metrics.STREAM_REQUESTS: self.stream_requests,
             Metrics.NON_STREAM_REQUESTS: self.non_stream_requests,
             Metrics.REQUEST_THROUGHPUT: round(self.qps, r),
